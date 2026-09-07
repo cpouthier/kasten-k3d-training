@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy.sh — Spins up (or tears down) a complete, disposable Kasten K10
+# deploy.sh — Spins up (or tears down) a complete, disposable Veeam Kasten
 # training lab on a local k3d (k3s-in-Docker) cluster. Works the same way on
 # macOS and Linux — the only real dependency is Docker; everything else
 # (k3d, kubectl, helm) is checked for and, if missing, you get the exact
@@ -30,14 +30,22 @@
 #   4. A tiny single-instance MinIO (1Gi) — Kasten's export/location target
 #   5. A sample app (namespace + ConfigMap + a 10Mi PVC + a Deployment that
 #      continuously appends timestamps to a file on that PVC)
-#   6. Kasten K10 itself, with the EULA pre-accepted and a location profile
+#   6. Veeam Kasten itself, with the EULA pre-accepted and a location profile
 #      already pointed at the in-cluster MinIO
+#   7. Background port-forwards for the Kasten dashboard and MinIO console,
+#      so their URLs work immediately with nothing left running in your
+#      terminal — they auto-stop after 12h, or immediately on `destroy`.
 #
 # Re-running this script is safe: every step either no-ops or upgrades in
 # place if it already ran before.
 set -euo pipefail
 
 CLUSTER_NAME="${CLUSTER_NAME:-kasten-training}"
+# Pinned to 1.34 to match CSI_HOSTPATH_DIR below (the CSI hostpath driver's
+# install files are fetched from its "kubernetes-1.34" directory) — without
+# this, k3d would default to whatever k3s version ships with the installed
+# k3d version, which can drift ahead (e.g. 1.35) and skew out of step with it.
+K3S_IMAGE="rancher/k3s:v1.34.11-k3s1"
 EXTERNAL_SNAPSHOTTER_VERSION="v8.6.0"
 CSI_HOSTPATH_VERSION="v1.18.0"
 # The directory kubernetes-csi/csi-driver-host-path's `deploy/kubernetes-latest`
@@ -46,16 +54,29 @@ CSI_HOSTPATH_VERSION="v1.18.0"
 # GitHub URLs don't follow symlinks) — if CSI_HOSTPATH_VERSION is ever
 # bumped, check what `deploy/kubernetes-latest` points to at that tag
 # (https://github.com/kubernetes-csi/csi-driver-host-path/tree/<tag>/deploy)
-# and update this to match.
+# and update this to match (and K3S_IMAGE above, to stay in step).
 CSI_HOSTPATH_DIR="kubernetes-1.34"
 ADMIN_EMAIL="${ADMIN_EMAIL:-trainee@example.com}"
 K10_AUTH_USER="${K10_AUTH_USER:-admin}"
 K10_AUTH_PASS="${K10_AUTH_PASS:-kasten123}"
+# Where the background port-forwards started at the end of a deploy track
+# their PID/log files, so `destroy` can find and stop them and a re-run of
+# `deploy` can tell they're already running. Keyed by CLUSTER_NAME so two
+# side-by-side labs don't collide.
+PF_STATE_DIR="${TMPDIR:-/tmp}/kasten-k3d-training-${CLUSTER_NAME}"
 
 log() { printf '\n==> %s\n' "$*"; }
 
 # --- destroy -----------------------------------------------------------------
 if [ "${1:-}" = "destroy" ]; then
+  if [ -d "$PF_STATE_DIR" ]; then
+    log "Stopping background port-forwards..."
+    for pidfile in "$PF_STATE_DIR"/*.pid; do
+      [ -f "$pidfile" ] || continue
+      kill "$(cat "$pidfile")" 2>/dev/null || true
+    done
+    rm -rf "$PF_STATE_DIR"
+  fi
   if ! command -v k3d >/dev/null 2>&1; then
     echo "k3d is not installed — nothing to do." >&2
     exit 0
@@ -113,8 +134,9 @@ fi
 if k3d cluster list -o json 2>/dev/null | grep -q "\"name\":\"${CLUSTER_NAME}\""; then
   log "k3d cluster '${CLUSTER_NAME}' already exists — reusing it."
 else
-  log "Creating k3d cluster '${CLUSTER_NAME}' (1 server + 1 agent)..."
+  log "Creating k3d cluster '${CLUSTER_NAME}' (1 server + 1 agent, k3s ${K3S_IMAGE#rancher/k3s:})..."
   k3d cluster create "$CLUSTER_NAME" \
+    --image "$K3S_IMAGE" \
     --agents 1 \
     --k3s-arg "--disable=traefik@server:0" \
     --wait
@@ -174,7 +196,7 @@ kubectl apply -f - <<'EOF'
 # The two StorageClasses for this lab, both backed by the same CSI hostpath
 # driver — only their names differ. There's nothing driver-specific about
 # that: any CSI driver can back any number of StorageClasses.
-#   sc1 — the cluster default. Kasten K10, MinIO, and the sample app's PVC
+#   sc1 — the cluster default. Veeam Kasten, MinIO, and the sample app's PVC
 #         all land here.
 #   sc2 — deliberately unused by anything at deploy time. It's there for
 #         training exercises: e.g. restoring demo-app's PVC into sc2 instead
@@ -201,6 +223,13 @@ EOF
 log "Making sc1 the default StorageClass..."
 kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' >/dev/null 2>&1 || true
 kubectl patch storageclass sc1 -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+
+# Both sc1 and sc2 use the same CSI driver, so this one VolumeSnapshotClass
+# covers snapshots for either of them — Kasten needs it explicitly flagged
+# like this to pick it reliably, rather than relying on Kubernetes' own
+# "default VolumeSnapshotClass" marking (not consistently supported).
+log "Annotating the VolumeSnapshotClass for Kasten (covers both sc1 and sc2)..."
+kubectl annotate volumesnapshotclass csi-hostpath-snapclass k10.kasten.io/is-snapshot-class=true --overwrite
 
 log "Waiting for the CSI hostpath driver pod to be ready..."
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=hostpath.csi.k8s.io -n default --timeout=180s
@@ -429,8 +458,8 @@ spec:
 EOF
 kubectl -n demo-app rollout status deployment/demo-app --timeout=120s
 
-# --- 6. Kasten K10 ------------------------------------------------------------
-log "Installing Kasten K10 (this can take a few minutes on first run)..."
+# --- 6. Veeam Kasten ------------------------------------------------------------
+log "Installing Veeam Kasten (this can take a few minutes on first run)..."
 helm repo add kasten https://charts.kasten.io/ --force-update >/dev/null
 helm repo update kasten >/dev/null
 
@@ -494,7 +523,7 @@ EOF
 # the lab ready. --field-selector excludes Completed Job pods (like MinIO's
 # bucket-creation job), which are done, not "ready", and would otherwise
 # block this forever.
-log "Waiting for all Kasten K10 pods to be up and running..."
+log "Waiting for all Veeam Kasten pods to be up and running..."
 kubectl -n kasten-io wait --for=condition=ready pod --all --timeout=300s \
   --field-selector=status.phase!=Succeeded
 
@@ -502,28 +531,70 @@ log "Waiting for every pod in the cluster to be up and running..."
 kubectl wait --for=condition=ready pod --all -A --timeout=300s \
   --field-selector=status.phase!=Succeeded
 
+# --- 8. Background port-forwards ---------------------------------------------
+# So the URLs below just work without you having to keep a terminal open
+# running `kubectl port-forward` by hand. Each one auto-stops itself after
+# 12h so it doesn't linger forever if you forget about it; `./deploy.sh
+# destroy` also stops them immediately.
+mkdir -p "$PF_STATE_DIR"
+
+port_in_use() {
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3<&- 3>&-; return 0; } || return 1
+}
+
+start_port_forward() {
+  local name="$1" namespace="$2" service="$3" ports="$4"
+  local local_port="${ports%%:*}"
+  local pidfile="${PF_STATE_DIR}/${name}.pid"
+
+  if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null; then
+    log "Port-forward for ${name} is already running (PID $(cat "$pidfile"))."
+    return
+  fi
+
+  if port_in_use "$local_port"; then
+    log "Port ${local_port} is already in use — skipping the ${name} port-forward. Something else may already be listening there, or a previous one is still up."
+    return
+  fi
+
+  nohup kubectl --namespace "$namespace" port-forward "service/${service}" "$ports" \
+    >"${PF_STATE_DIR}/${name}.log" 2>&1 &
+  local pid=$!
+  echo "$pid" >"$pidfile"
+  nohup bash -c "sleep 43200; kill ${pid} 2>/dev/null" >/dev/null 2>&1 &
+
+  sleep 1
+  if ! kill -0 "$pid" 2>/dev/null; then
+    log "WARNING: the ${name} port-forward exited immediately — check ${PF_STATE_DIR}/${name}.log"
+  fi
+}
+
+log "Starting the Kasten and MinIO port-forwards in the background (auto-stop after 12h)..."
+start_port_forward kasten kasten-io gateway 8080:80
+start_port_forward minio minio minio 9001:9001
+
 log "Lab ready!"
 cat <<EOF
 
-Kasten dashboard
-    kubectl --namespace kasten-io port-forward service/gateway 8080:80
+Kasten dashboard — already running, just open it:
     URL:      http://127.0.0.1:8080/k10/#/
     username: ${K10_AUTH_USER}
     password: ${K10_AUTH_PASS}
 
-MinIO console (for a peek at what Kasten exports)
-    kubectl -n minio port-forward service/minio 9001:9001
+MinIO console — already running, just open it:
     URL:      http://127.0.0.1:9001/
     username: minioadmin
     password: minioadmin
+
+Both port-forwards run in the background and auto-stop after 12h (or
+immediately on './deploy.sh destroy'). Logs, if you need them:
+    ${PF_STATE_DIR}/kasten.log
+    ${PF_STATE_DIR}/minio.log
 
 Sample application (demo-app)
     No web UI — it's a background job appending timestamps to its PVC.
     kubectl -n demo-app get pods
     kubectl -n demo-app exec deploy/demo-app -- cat /data/log.txt
-
-Each port-forward above runs in the foreground — keep its terminal open
-(or run it with & to background it) while you use that URL.
 
 Tear everything down:
     ./deploy.sh destroy

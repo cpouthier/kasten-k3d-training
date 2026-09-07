@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Prepares a Windows machine to run the Kasten K10 k3d training lab
+    Prepares a Windows machine to run the Veeam Kasten k3d training lab
     (deploy.sh) inside WSL2.
 
 .DESCRIPTION
@@ -114,7 +114,7 @@ Write-Host @"
        chmod +x deploy.sh
        ./deploy.sh
 
-   That single script does everything else (k3d cluster, Kasten K10, MinIO,
+   That single script does everything else (k3d cluster, Veeam Kasten, MinIO,
    the sample app) — no git clone, no other files needed. To tear the lab
    down later, run './deploy.sh destroy' the same way.
 

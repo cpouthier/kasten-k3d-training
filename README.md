@@ -1,6 +1,6 @@
-# Kasten K10 — k3d training lab
+# Veeam Kasten — k3d training lab
 
-A complete, disposable Kasten K10 lab you can stand up on your own laptop in
+A complete, disposable Veeam Kasten lab you can stand up on your own laptop in
 a few minutes — macOS, Linux, or Windows (via WSL2), no cloud account, no
 shared cluster. It's a single, self-contained script: no `git clone`, no
 extra files to fetch — download `deploy.sh` and run it. The same file also
@@ -20,13 +20,16 @@ tears the lab down (`./deploy.sh destroy`).
   Kasten's backups on it would fall back to a slow, less realistic
   file-copy method instead of the real CSI snapshot workflow you'd see on
   any production cluster. This lab gives you an actual snapshot-capable
-  CSI driver instead.
+  CSI driver instead, with its VolumeSnapshotClass annotated
+  `k10.kasten.io/is-snapshot-class: "true"` so Kasten reliably picks it up
+  for both sc1 and sc2 (same driver, so one VolumeSnapshotClass covers
+  both).
 - A tiny single-instance **MinIO** (1Gi) as the S3-compatible target Kasten
   exports to
 - A **sample application** (`demo-app` namespace): a ConfigMap, a 10Mi PVC,
   and a Deployment that continuously appends a timestamp to a file on that
   PVC every 5 seconds — enough to actually *see* a restore rewind the data
-- **Kasten K10** itself, EULA pre-accepted, with a location profile already
+- **Veeam Kasten** itself, EULA pre-accepted, with a location profile already
   pointed at the in-cluster MinIO
 
 Everything lives inside the k3d cluster's Docker containers/volumes.
@@ -61,7 +64,7 @@ command to run inside WSL2 to fetch and launch `deploy.sh` — see
 [Windows setup](#windows-setup) below.
 
 **Resources** — measured on a real run (27 pods: k3d system pods, the CSI
-driver, MinIO, the sample app, and all of Kasten K10's microservices):
+driver, MinIO, the sample app, and all of Veeam Kasten's microservices):
 
 | Resource | Measured usage | Recommended to allocate |
 |---|---|---|
@@ -88,15 +91,16 @@ chmod +x deploy.sh
 ```
 
 Takes 3–6 minutes depending on your internet connection (mostly spent
-pulling the Kasten K10 images). The script prints exactly what to run next
-when it's done — the short version:
+pulling the Veeam Kasten images). When it's done, both URLs below already
+work — `deploy.sh` starts a background `kubectl port-forward` for each one
+itself (auto-stopping after 12h, or immediately on `./deploy.sh destroy`),
+so there's no `kubectl port-forward` command to run or terminal to keep
+open:
 
-```bash
-# Kasten dashboard
-kubectl -n kasten-io port-forward service/gateway 8080:80
-# then open http://127.0.0.1:8080/k10/#/ and log in with:
-#   username: admin
-#   password: kasten123
+```
+Kasten dashboard: http://127.0.0.1:8080/k10/#/
+  username: admin
+  password: kasten123
 ```
 
 Kasten is installed with a fixed username/password (Basic Auth) instead of
@@ -241,7 +245,14 @@ keeps whatever credentials were in place the last time `deploy.sh` ran with
 Helm. Re-run `./deploy.sh` with the same environment variables you used
 originally, or `./deploy.sh destroy` and start fresh with new ones.
 
+**A dashboard/MinIO URL isn't reachable**
+`deploy.sh` starts each port-forward in the background and skips it if that
+local port is already taken (printing a message saying so) — check the log
+files it points you to (`kasten.log`/`minio.log` under a temp directory
+named for your `CLUSTER_NAME`) for what actually happened. Re-running
+`./deploy.sh` retries any port-forward that isn't already running.
+
 **Starting over cleanly**
 `./deploy.sh destroy` deletes the k3d cluster entirely (containers +
-volumes). There's no other state to clean up — `deploy.sh` afterwards
-starts fresh.
+volumes) and stops the background port-forwards. There's no other state to
+clean up — `deploy.sh` afterwards starts fresh.
