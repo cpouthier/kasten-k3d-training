@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-app
+  labels:
+    # Lets you target this one namespace with a Kasten policy by label
+    # instead of picking it by name.
+    k10.kasten.io/appNamespace: "true"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: demo-data
+  namespace: demo-app
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: csi-hostpath-sc
+  resources:
+    requests:
+      storage: 10Mi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-config
+  namespace: demo-app
+data:
+  # Just here so the app has more than one kind of manifest to protect,
+  # like a real one would (config alongside data).
+  GREETING: "Hello from the Kasten k3d training lab"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app
+  namespace: demo-app
+spec:
+  replicas: 1
+  strategy:
+    # ReadWriteOnce PVC: never run two pods at once, or the second gets
+    # stuck Pending waiting to attach a volume the first pod still holds.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: demo-app
+  template:
+    metadata:
+      labels:
+        app: demo-app
+    spec:
+      containers:
+        - name: demo-app
+          image: busybox:1.36
+          envFrom:
+            - configMapRef:
+                name: demo-config
+          # Appends a timestamped line every 5s. This is the whole point of
+          # the lab: back up, then keep writing, then restore, and watch
+          # the log file jump back to its state at backup time.
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "$GREETING" >> /data/log.txt
+              while true; do
+                date +"%Y-%m-%d %H:%M:%S - still running" >> /data/log.txt
+                sleep 5
+              done
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 20m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: demo-data
