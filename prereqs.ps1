@@ -5,16 +5,16 @@
 
 .DESCRIPTION
     deploy.sh is a bash script and assumes a Linux environment, so on
-    Windows it runs inside WSL2 rather than natively — this is the same
+    Windows it runs inside WSL2 rather than natively - this is the same
     approach the lab's README already recommends, just automated. This
     script only handles the Windows-side setup:
 
-      1. Checks the Windows build supports the modern `wsl --install`
+      1. Checks the Windows build supports the modern "wsl --install"
          one-liner, and runs it if WSL2 / a Linux distro isn't installed
          yet (this also enables the required Windows features).
       2. Checks for Docker Desktop and installs it via winget if missing.
       3. Prints the exact commands to finish setup: enabling Docker
-         Desktop's WSL integration (a one-time checkbox — there's no
+         Desktop's WSL integration (a one-time checkbox - there's no
          stable scriptable API for it across Docker Desktop versions, so
          this is a manual step) and fetching + running deploy.sh inside
          your WSL2 distro.
@@ -23,7 +23,7 @@
     anything already done.
 
 .NOTES
-    Run this from an elevated PowerShell (Run as Administrator) — enabling
+    Run this from an elevated PowerShell (Run as Administrator) - enabling
     WSL and installing software both need it.
 #>
 
@@ -39,7 +39,7 @@ function Write-Warn2($msg) { Write-Host "    $msg" -ForegroundColor Yellow }
 Write-Step "Checking Windows version..."
 $build = [System.Environment]::OSVersion.Version.Build
 if ($build -lt 19041) {
-    Write-Warn2 "Windows build $build detected — `wsl --install` needs build 19041+ (Windows 10 version 2004) or Windows 11."
+    Write-Warn2 "Windows build $build detected - the 'wsl --install' command needs build 19041+ (Windows 10 version 2004) or Windows 11."
     Write-Warn2 "Update Windows first (Settings > Windows Update), then re-run this script."
     Write-Warn2 "Alternatively, follow the manual WSL2 install guide: https://learn.microsoft.com/windows/wsl/install-manual"
     exit 1
@@ -60,7 +60,7 @@ if ($wslInstalled) {
     Write-Host "    WSL is already installed."
     $distros = (wsl -l -q 2>&1) -join "`n"
     if ([string]::IsNullOrWhiteSpace($distros)) {
-        Write-Warn2 "No Linux distro installed under WSL yet — installing the default (Ubuntu)..."
+        Write-Warn2 "No Linux distro installed under WSL yet - installing the default (Ubuntu)..."
         wsl --install -d Ubuntu
         Write-Warn2 "A reboot may be required. After rebooting, launch 'Ubuntu' from the Start Menu once to finish its first-run setup (creating a username/password), then re-run this script."
         exit 0
@@ -69,7 +69,7 @@ if ($wslInstalled) {
         $distros -split "`n" | ForEach-Object { Write-Host "      $_" }
     }
 } else {
-    Write-Warn2 "WSL not found — installing WSL2 + Ubuntu (this enables required Windows features too)..."
+    Write-Warn2 "WSL not found - installing WSL2 + Ubuntu (this enables required Windows features too)..."
     wsl --install
     Write-Warn2 "A REBOOT IS REQUIRED to finish this. After rebooting:"
     Write-Warn2 "  1. Launch 'Ubuntu' from the Start Menu once to finish its first-run setup (username/password)."
@@ -98,11 +98,11 @@ if ($dockerInstalled) {
 }
 
 # --- 3. What's left (manual, one-time) ---------------------------------------
-Write-Step "Almost done — two manual steps left:"
+Write-Step "Almost done - two manual steps left:"
 Write-Host @"
 
 1. Launch Docker Desktop. On first launch it may ask you to sign in/accept
-   its terms — click through that, then go to:
+   its terms - click through that, then go to:
        Settings > Resources > WSL Integration
    and enable integration for your Ubuntu distro (recent Docker Desktop
    versions do this by default, but double-check it's toggled on).
@@ -115,7 +115,7 @@ Write-Host @"
        ./deploy.sh
 
    That single script does everything else (k3d cluster, Veeam Kasten, MinIO,
-   the sample app) — no git clone, no other files needed. To tear the lab
+   the sample app) - no git clone, no other files needed. To tear the lab
    down later, run './deploy.sh destroy' the same way.
 
 "@

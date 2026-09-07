@@ -70,7 +70,22 @@ driver, MinIO, the sample app, and all of Veeam Kasten's microservices):
 |---|---|---|
 | RAM | ~1.3 GB total across all pods at idle | At least 4 GB free for Docker Desktop/the Docker daemon (6–8 GB for comfortable headroom during backups/restores) |
 | CPU | ~0.3 vCPU at idle, bursts during install/backup | 2 vCPUs minimum |
-| Disk | ~9 GB of container images (spread across the k3d server + agent nodes, each pulls its own copy) + ~1 GB for the MinIO/demo-app PVCs | 10–15 GB free disk |
+| Disk | ~9 GB of container images (see breakdown below) + ~1 GB for the MinIO/demo-app PVCs | 10–15 GB free disk |
+
+That ~9 GB covers every image the script pulls, across both of k3d's nodes
+(1 server + 1 agent — each maintains its own independent image store, so
+most images get downloaded twice, once per node). Roughly, by component:
+
+| Component | Approx. share of the ~9 GB |
+|---|---|
+| Veeam Kasten microservices (23 images) | ~7.5 GB |
+| CSI hostpath driver + sidecars (provisioner, attacher, resizer, snapshotter, health-monitor — 9 images) | ~0.8 GB |
+| MinIO + `mc` | ~0.2 GB |
+| k3s's own bundled system images (CoreDNS, metrics-server, local-path-provisioner, pause) | ~0.15 GB |
+| Sample app (`busybox`) | negligible |
+
+Veeam Kasten's own images are by far the largest pull — the CSI driver,
+MinIO, and k3s's own system images together add up to well under 1.5 GB.
 
 On macOS/Windows this comes out of whatever Docker Desktop's VM is
 configured with (Settings → Resources) — bump that if it's set below these
