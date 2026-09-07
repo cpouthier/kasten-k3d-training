@@ -11,7 +11,9 @@
 #   3. The CSI hostpath driver (kubernetes-csi/csi-driver-host-path) — a
 #      real, snapshot-capable CSI driver, unlike k3s's built-in
 #      "local-path" storage class which cannot do CSI snapshots at all.
-#      Set as the cluster's default StorageClass.
+#      Exposed as two StorageClasses backed by the same driver: sc1 (the
+#      cluster default — Kasten/MinIO/demo-app all land here) and sc2
+#      (unused at deploy time, reserved for training exercises).
 #   4. A tiny single-instance MinIO (1Gi) — Kasten's export/location target
 #   5. A sample app (namespace + ConfigMap + a 10Mi PVC + a Deployment that
 #      continuously appends timestamps to a file on that PVC)
@@ -28,6 +30,8 @@ CLUSTER_NAME="${CLUSTER_NAME:-kasten-training}"
 EXTERNAL_SNAPSHOTTER_VERSION="v8.6.0"
 CSI_HOSTPATH_VERSION="v1.18.0"
 ADMIN_EMAIL="${ADMIN_EMAIL:-trainee@example.com}"
+K10_AUTH_USER="${K10_AUTH_USER:-admin}"
+K10_AUTH_PASS="${K10_AUTH_PASS:-kasten123}"
 
 log() { printf '\n==> %s\n' "$*"; }
 
@@ -49,6 +53,7 @@ case "$os" in
     need kubectl "brew install kubectl"
     need helm   "brew install helm"
     need git    "brew install git"
+    need openssl "brew install openssl"
     ;;
   Linux)
     need docker "curl -fsSL https://get.docker.com | sh"
@@ -56,6 +61,7 @@ case "$os" in
     need kubectl "curl -LO https://dl.k8s.io/release/\$(curl -Ls https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl && sudo install -m 0755 kubectl /usr/local/bin/kubectl"
     need helm   "curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash"
     need git    "your distro's package manager, e.g. sudo apt install -y git"
+    need openssl "your distro's package manager, e.g. sudo apt install -y openssl"
     ;;
   *)
     echo "Unsupported OS: $os — this lab targets macOS and Linux. On Windows, run it from inside WSL2 (which reports itself as Linux)." >&2
@@ -106,13 +112,16 @@ git clone --quiet --depth 1 --branch "$CSI_HOSTPATH_VERSION" \
 (cd "$TMP_CSI_DIR" && ./deploy/kubernetes-latest/deploy.sh)
 
 # The driver ships no StorageClass/VolumeSnapshotClass of its own — these
-# are meant to be applied separately (see the project's own examples/).
-kubectl apply -f "$TMP_CSI_DIR/examples/csi-storageclass.yaml"
+# are meant to be applied separately. We skip the upstream example's own
+# StorageClass (it'd just be a third, unused one) and apply our own two
+# instead: sc1 (default, used by Kasten/MinIO/demo-app) and sc2 (reserved
+# for training exercises).
 kubectl apply -f "$TMP_CSI_DIR/deploy/kubernetes-latest/hostpath/csi-hostpath-snapshotclass.yaml"
+kubectl apply -f "${SCRIPT_DIR}/manifests/storageclasses.yaml"
 
-log "Making csi-hostpath-sc the default StorageClass..."
+log "Making sc1 the default StorageClass..."
 kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' >/dev/null 2>&1 || true
-kubectl patch storageclass csi-hostpath-sc -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+kubectl patch storageclass sc1 -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
 
 log "Waiting for the CSI hostpath driver pod to be ready..."
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=hostpath.csi.k8s.io -n default --timeout=180s
@@ -132,7 +141,13 @@ kubectl -n demo-app rollout status deployment/demo-app --timeout=120s
 log "Installing Kasten K10 (this can take a few minutes on first run)..."
 helm repo add kasten https://charts.kasten.io/ --force-update >/dev/null
 helm repo update kasten >/dev/null
-helm upgrade --install k10 kasten/k10 --namespace kasten-io --create-namespace --wait --timeout 10m
+
+log "Generating the dashboard login (Basic Auth, user: ${K10_AUTH_USER})..."
+K10_HTPASSWD="${K10_AUTH_USER}:$(openssl passwd -apr1 "${K10_AUTH_PASS}")"
+
+helm upgrade --install k10 kasten/k10 --namespace kasten-io --create-namespace --wait --timeout 10m \
+  --set auth.basicAuth.enabled=true \
+  --set-string auth.basicAuth.htpasswd="${K10_HTPASSWD}"
 
 log "Accepting the EULA so the dashboard doesn't block on it..."
 kubectl apply -f - <<EOF
@@ -146,13 +161,6 @@ data:
   company: "Kasten k3d Training Lab"
   email: "${ADMIN_EMAIL}"
 EOF
-
-log "Creating a login identity for the dashboard (k10-trainee, bound to the k10-admin ClusterRole)..."
-kubectl -n kasten-io create serviceaccount k10-trainee --dry-run=client -o yaml | kubectl apply -f -
-kubectl create clusterrolebinding k10-trainee-binding \
-  --clusterrole=k10-admin \
-  --serviceaccount=kasten-io:k10-trainee \
-  --dry-run=client -o yaml | kubectl apply -f -
 
 log "Creating the MinIO location profile..."
 kubectl create secret generic k10-minio-secret \
@@ -187,24 +195,43 @@ spec:
         namespace: kasten-io
 EOF
 
+# --- 7. Final readiness check ------------------------------------------------
+# Belt-and-braces: the steps above already wait on their own rollouts, but
+# this gives one last, explicit confirmation that nothing crash-looped after
+# the fact (e.g. a slow image pull settling into a restart) before declaring
+# the lab ready. --field-selector excludes Completed Job pods (like MinIO's
+# bucket-creation job), which are done, not "ready", and would otherwise
+# block this forever.
+log "Waiting for all Kasten K10 pods to be up and running..."
+kubectl -n kasten-io wait --for=condition=ready pod --all --timeout=300s \
+  --field-selector=status.phase!=Succeeded
+
+log "Waiting for every pod in the cluster to be up and running..."
+kubectl wait --for=condition=ready pod --all -A --timeout=300s \
+  --field-selector=status.phase!=Succeeded
+
 log "Lab ready!"
-cat <<'EOF'
+cat <<EOF
 
-Access the Kasten dashboard:
+Kasten dashboard
     kubectl --namespace kasten-io port-forward service/gateway 8080:80
-    then open http://127.0.0.1:8080/k10/#/
+    URL:      http://127.0.0.1:8080/k10/#/
+    username: ${K10_AUTH_USER}
+    password: ${K10_AUTH_PASS}
 
-Log in with a Kubernetes bearer token (Kasten has no basic-auth user in
-this lab). Generate one for the pre-created admin binding with:
-    kubectl -n kasten-io create token k10-trainee --duration=24h
+MinIO console (for a peek at what Kasten exports)
+    kubectl -n minio port-forward service/minio 9001:9001
+    URL:      http://127.0.0.1:9001/
+    username: minioadmin
+    password: minioadmin
 
-Sample app:
+Sample application (demo-app)
+    No web UI — it's a background job appending timestamps to its PVC.
     kubectl -n demo-app get pods
     kubectl -n demo-app exec deploy/demo-app -- cat /data/log.txt
 
-MinIO console (for a peek at what Kasten exports):
-    kubectl -n minio port-forward service/minio 9001:9001
-    then open http://127.0.0.1:9001/ (minioadmin / minioadmin)
+Each port-forward above runs in the foreground — keep its terminal open
+(or run it with & to background it) while you use that URL.
 
 Tear everything down:
     ./destroy.sh

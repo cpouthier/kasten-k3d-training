@@ -10,11 +10,15 @@ script deploys everything; one script tears it all down.
 
 - A local **k3d** cluster (k3s running in Docker) — 1 server + 1 agent node
 - The **CSI hostpath driver** ([kubernetes-csi/csi-driver-host-path](https://github.com/kubernetes-csi/csi-driver-host-path)),
-  set as the default StorageClass. This matters: k3s's built-in `local-path`
-  StorageClass **cannot do CSI snapshots at all** — Kasten's backups on it
-  would fall back to a slow, less realistic file-copy method instead of the
-  real CSI snapshot workflow you'd see on any production cluster. This lab
-  gives you an actual snapshot-capable CSI driver instead.
+  exposed as **two StorageClasses** backed by the same driver: `sc1` (the
+  cluster default — Kasten, MinIO, and the sample app's PVC all land here)
+  and `sc2` (unused at deploy time, reserved for training exercises like
+  restoring a PVC into a different StorageClass). This matters: k3s's
+  built-in `local-path` StorageClass **cannot do CSI snapshots at all** —
+  Kasten's backups on it would fall back to a slow, less realistic
+  file-copy method instead of the real CSI snapshot workflow you'd see on
+  any production cluster. This lab gives you an actual snapshot-capable
+  CSI driver instead.
 - A tiny single-instance **MinIO** (1Gi) as the S3-compatible target Kasten
   exports to
 - A **sample application** (`demo-app` namespace): a ConfigMap, a 10Mi PVC,
@@ -46,9 +50,20 @@ whatever's missing for your OS, rather than trying to install things for you.
 to the script and everything works the same way. Running it directly from
 PowerShell/cmd isn't supported.
 
-**Resources**: the whole lab is intentionally tiny (a few hundred MB of RAM
-across all pods). Any laptop that can run Docker Desktop comfortably can run
-this.
+**Resources** — measured on a real run (27 pods: k3d system pods, the CSI
+driver, MinIO, the sample app, and all of Kasten K10's microservices):
+
+| Resource | Measured usage | Recommended to allocate |
+|---|---|---|
+| RAM | ~1.3 GB total across all pods at idle | At least 4 GB free for Docker Desktop/the Docker daemon (6–8 GB for comfortable headroom during backups/restores) |
+| CPU | ~0.3 vCPU at idle, bursts during install/backup | 2 vCPUs minimum |
+| Disk | ~9 GB of container images (spread across the k3d server + agent nodes, each pulls its own copy) + ~1 GB for the MinIO/demo-app PVCs | 10–15 GB free disk |
+
+On macOS/Windows this comes out of whatever Docker Desktop's VM is
+configured with (Settings → Resources) — bump that if it's set below these
+numbers. On Linux, Docker uses the host directly, so it's the host's own
+free RAM/disk that matters. Any laptop from the last several years that can
+run Docker Desktop comfortably can run this.
 
 ---
 
@@ -68,12 +83,13 @@ when it's done — the short version:
 # Kasten dashboard
 kubectl -n kasten-io port-forward service/gateway 8080:80
 # then open http://127.0.0.1:8080/k10/#/ and log in with:
-kubectl -n kasten-io create token k10-trainee --duration=24h
+#   username: admin
+#   password: kasten123
 ```
 
-Paste that token into the dashboard's login screen (Kasten has no
-username/password in this lab — see [Why no basic auth?](#why-no-basic-auth)
-below).
+Kasten is installed with a fixed username/password (Basic Auth) instead of
+the default Kubernetes-token login, so there's nothing to generate or paste
+each time — see [Login](#login) below to change the credentials.
 
 ---
 
@@ -100,23 +116,34 @@ below).
    ```
 
 From here, the natural next steps to explore: restoring into a **new**
-namespace (clone), disaster-recovery by deleting the whole `demo-app`
-namespace and restoring from the MinIO export alone, or exporting/importing
-across a *second* lab cluster if you spin one up with a different
-`CLUSTER_NAME`.
+namespace (clone), restoring into the **`sc2`** StorageClass instead of the
+default `sc1` (Kasten lets you pick the target StorageClass per-PVC during a
+restore — a good way to see storage retargeting in action), disaster-recovery
+by deleting the whole `demo-app` namespace and restoring from the MinIO
+export alone, or exporting/importing across a *second* lab cluster if you
+spin one up with a different `CLUSTER_NAME`.
 
 ---
 
-## Why no basic auth?
+## Login
 
-Kasten K10 supports HTTP Basic Auth (`--set auth.basicAuth.enabled=true`
-plus an htpasswd string), which is what you'll see in a lot of quick demo
-scripts. This lab deliberately skips it: generating an htpasswd hash
-portably across macOS and Linux means depending on either the `htpasswd`
-binary (not installed by default on either OS) or Python's `crypt` module
-(removed in Python 3.13). Kasten's built-in Kubernetes-token login needs
-neither — `kubectl create token` is enough, on any platform, with tools
-you already have installed for this lab anyway.
+Kasten has no true "no authentication" mode — some login method is always
+required (Basic Auth, token auth, OIDC, LDAP, or the default Kubernetes
+RBAC-token login). This lab uses HTTP Basic Auth with a fixed, non-expiring
+username/password so you can log in the same way every time without
+generating a fresh token per session:
+
+```
+username: admin
+password: kasten123
+```
+
+The htpasswd hash Kasten needs is generated by `deploy.sh` itself with
+`openssl passwd -apr1`, which ships by default on both macOS (LibreSSL) and
+Linux (OpenSSL) — no extra tools to install.
+
+Change the credentials with the `K10_AUTH_USER` / `K10_AUTH_PASS`
+environment variables (see [Configuration](#configuration)).
 
 ---
 
@@ -127,8 +154,9 @@ kasten-k3d-training/
 ├── deploy.sh              # one-shot: cluster + CSI + MinIO + sample app + Kasten
 ├── destroy.sh             # tears down the k3d cluster (that's the only cleanup needed)
 └── manifests/
-    ├── minio.yaml          # namespace, Secret, 1Gi PVC, Deployment, Service, bucket-creation Job
-    └── sample-app.yaml     # namespace, ConfigMap, 10Mi PVC, Deployment
+    ├── minio.yaml             # namespace, Secret, 1Gi PVC, Deployment, Service, bucket-creation Job
+    ├── sample-app.yaml        # namespace, ConfigMap, 10Mi PVC, Deployment
+    └── storageclasses.yaml    # sc1 (default) + sc2 (for exercises) — same CSI driver, different names
 ```
 
 `deploy.sh` is safe to re-run — every step either no-ops or upgrades in
@@ -145,6 +173,8 @@ Environment variables, all optional:
 |---|---|---|
 | `CLUSTER_NAME` | `kasten-training` | k3d cluster name — set this to run a second, independent lab alongside the first |
 | `ADMIN_EMAIL` | `trainee@example.com` | Used only for the Kasten EULA acceptance ConfigMap |
+| `K10_AUTH_USER` | `admin` | Dashboard Basic Auth username |
+| `K10_AUTH_PASS` | `kasten123` | Dashboard Basic Auth password |
 
 Example: two independent labs side by side (e.g. for practicing
 cross-cluster DR/migration) —
@@ -172,11 +202,11 @@ picks up where it left off.
 window, but a first-time image pull on a slow link can still exceed it.
 Just re-run `./deploy.sh` — `helm upgrade --install` resumes cleanly.
 
-**`kubectl create token k10-trainee` fails with "not found"**
-`deploy.sh` creates this ServiceAccount itself (bound to Kasten's own
-`k10-admin` ClusterRole) right after the Helm install — if it's missing,
-either `deploy.sh` didn't complete, or something deleted it. Re-run
-`./deploy.sh`; it recreates it idempotently.
+**Dashboard login rejects `admin` / `kasten123`**
+You likely set `K10_AUTH_USER`/`K10_AUTH_PASS` on a previous run — Kasten
+keeps whatever credentials were in place the last time `deploy.sh` ran with
+Helm. Re-run `./deploy.sh` with the same environment variables you used
+originally, or `./destroy.sh` and start fresh with new ones.
 
 **Starting over cleanly**
 `./destroy.sh` deletes the k3d cluster entirely (containers + volumes).

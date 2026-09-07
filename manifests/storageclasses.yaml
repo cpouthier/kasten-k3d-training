@@ -1,0 +1,25 @@
+# The two StorageClasses for this lab, both backed by the same CSI hostpath
+# driver — only their names differ. There's nothing driver-specific about
+# that: any CSI driver can back any number of StorageClasses.
+#   sc1 — the cluster default. Kasten K10, MinIO, and the sample app's PVC
+#         all land here.
+#   sc2 — deliberately unused by anything at deploy time. It's there for
+#         training exercises: e.g. restoring demo-app's PVC into sc2 instead
+#         of sc1, to see Kasten retarget storage on restore.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: sc1
+provisioner: hostpath.csi.k8s.io
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: sc2
+provisioner: hostpath.csi.k8s.io
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true

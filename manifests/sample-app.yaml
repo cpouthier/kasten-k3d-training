@@ -14,7 +14,7 @@ metadata:
   namespace: demo-app
 spec:
   accessModes: ["ReadWriteOnce"]
-  storageClassName: csi-hostpath-sc
+  storageClassName: sc1
   resources:
     requests:
       storage: 10Mi
