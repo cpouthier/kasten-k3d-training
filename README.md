@@ -1,8 +1,10 @@
 # Kasten K10 — k3d training lab
 
 A complete, disposable Kasten K10 lab you can stand up on your own laptop in
-a few minutes — macOS or Linux, no cloud account, no shared cluster. One
-script deploys everything; one script tears it all down.
+a few minutes — macOS, Linux, or Windows (via WSL2), no cloud account, no
+shared cluster. It's a single, self-contained script: no `git clone`, no
+extra files to fetch — download `deploy.sh` and run it. The same file also
+tears the lab down (`./deploy.sh destroy`).
 
 ---
 
@@ -28,15 +30,19 @@ script deploys everything; one script tears it all down.
   pointed at the in-cluster MinIO
 
 Everything lives inside the k3d cluster's Docker containers/volumes.
-Deleting the cluster (`./destroy.sh`) leaves nothing behind on your machine.
+Deleting the cluster (`./deploy.sh destroy`) leaves nothing behind on your
+machine.
 
 ---
 
 ## Prerequisites
 
 Only Docker is a hard requirement — `deploy.sh` checks for everything else
-(`k3d`, `kubectl`, `helm`, `git`) and tells you the exact command to install
-whatever's missing for your OS, rather than trying to install things for you.
+(`k3d`, `kubectl`, `helm`, `curl`, `openssl`) and tells you the exact
+command to install whatever's missing for your OS, rather than trying to
+install things for you. **`git` is not needed at all** — every file the
+script needs, including the CSI driver's own install files, is fetched
+directly over HTTPS.
 
 | Tool | macOS | Linux |
 |---|---|---|
@@ -44,11 +50,15 @@ whatever's missing for your OS, rather than trying to install things for you.
 | k3d | `brew install k3d` | `curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh \| bash` |
 | kubectl | `brew install kubectl` | see [kubernetes.io/docs/tasks/tools](https://kubernetes.io/docs/tasks/tools/) |
 | helm | `brew install helm` | `curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \| bash` |
-| git | `brew install git` | your package manager |
+| curl, openssl | already on macOS | already on virtually every distro |
 
 **Windows**: run this from inside **WSL2** — it identifies itself as Linux
 to the script and everything works the same way. Running it directly from
-PowerShell/cmd isn't supported.
+PowerShell/cmd isn't supported. `prereqs.ps1` (in this repo) automates
+getting there: run it from an elevated PowerShell and it sets up WSL2 +
+Ubuntu and installs Docker Desktop if needed, then tells you the one
+command to run inside WSL2 to fetch and launch `deploy.sh` — see
+[Windows setup](#windows-setup) below.
 
 **Resources** — measured on a real run (27 pods: k3d system pods, the CSI
 driver, MinIO, the sample app, and all of Kasten K10's microservices):
@@ -69,9 +79,11 @@ run Docker Desktop comfortably can run this.
 
 ## Quick start
 
+macOS or Linux (or Windows, from inside WSL2 — see [Windows setup](#windows-setup)):
+
 ```bash
-git clone https://github.com/cpouthier/kasten-k3d-training.git
-cd kasten-k3d-training
+curl -fsSL https://raw.githubusercontent.com/cpouthier/kasten-k3d-training/main/deploy.sh -o deploy.sh
+chmod +x deploy.sh
 ./deploy.sh
 ```
 
@@ -147,16 +159,37 @@ environment variables (see [Configuration](#configuration)).
 
 ---
 
+## Windows setup
+
+From an elevated PowerShell (right-click → Run as Administrator):
+
+```powershell
+curl.exe -fsSL https://raw.githubusercontent.com/cpouthier/kasten-k3d-training/main/prereqs.ps1 -o prereqs.ps1
+powershell -ExecutionPolicy Bypass -File prereqs.ps1
+```
+
+It checks your Windows build supports `wsl --install`, sets up WSL2 +
+Ubuntu if that's not already done (this may require a reboot — the script
+tells you when and what to do next), and installs Docker Desktop via
+`winget` if it's missing. It finishes by printing the one-time manual step
+(enabling Docker Desktop's WSL integration for Ubuntu — there's no stable
+way to script that toggle across Docker Desktop versions) and the exact
+command to run inside Ubuntu/WSL2 to fetch and launch `deploy.sh`.
+
+`deploy.sh` itself never runs on native Windows — it's a bash script, and
+WSL2 gives you the same tested Linux environment as macOS/Linux, just
+reached through a Windows machine.
+
+---
+
 ## Repository layout
 
 ```
 kasten-k3d-training/
-├── deploy.sh              # one-shot: cluster + CSI + MinIO + sample app + Kasten
-├── destroy.sh             # tears down the k3d cluster (that's the only cleanup needed)
-└── manifests/
-    ├── minio.yaml             # namespace, Secret, 1Gi PVC, Deployment, Service, bucket-creation Job
-    ├── sample-app.yaml        # namespace, ConfigMap, 10Mi PVC, Deployment
-    └── storageclasses.yaml    # sc1 (default) + sc2 (for exercises) — same CSI driver, different names
+├── deploy.sh      # the whole lab: run it to deploy, `./deploy.sh destroy` to tear down.
+│                  # Fully self-contained — every manifest is inlined, nothing else to fetch.
+├── prereqs.ps1    # Windows-only: gets WSL2 + Docker Desktop set up so deploy.sh can run
+└── README.md
 ```
 
 `deploy.sh` is safe to re-run — every step either no-ops or upgrades in
@@ -206,8 +239,9 @@ Just re-run `./deploy.sh` — `helm upgrade --install` resumes cleanly.
 You likely set `K10_AUTH_USER`/`K10_AUTH_PASS` on a previous run — Kasten
 keeps whatever credentials were in place the last time `deploy.sh` ran with
 Helm. Re-run `./deploy.sh` with the same environment variables you used
-originally, or `./destroy.sh` and start fresh with new ones.
+originally, or `./deploy.sh destroy` and start fresh with new ones.
 
 **Starting over cleanly**
-`./destroy.sh` deletes the k3d cluster entirely (containers + volumes).
-There's no other state to clean up — `deploy.sh` afterwards starts fresh.
+`./deploy.sh destroy` deletes the k3d cluster entirely (containers +
+volumes). There's no other state to clean up — `deploy.sh` afterwards
+starts fresh.
