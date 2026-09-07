@@ -265,6 +265,7 @@ features.
 kasten-k3d-training/
 ├── deploy.sh      # the whole lab: run it to deploy, `./deploy.sh destroy` to tear down.
 │                  # Fully self-contained, every manifest is inlined, nothing else to fetch.
+├── deploy-base.sh # same, minus Veeam Kasten itself, see "Base infra only" below
 ├── prereqs.ps1    # Windows-only: gets WSL2 + Docker (installed inside it) set up so deploy.sh can run
 ├── remove-wsl.ps1 # Windows-only: undoes prereqs.ps1 (removes WSL2 distros + features)
 └── README.md
@@ -273,6 +274,24 @@ kasten-k3d-training/
 `deploy.sh` is safe to re-run, every step either no-ops or upgrades in
 place if it already ran (the k3d cluster check, the CSI driver's own
 idempotent manifests, `helm upgrade --install`, `kubectl apply`).
+
+**Base infra only**: `deploy-base.sh` is the same lab minus Veeam Kasten
+itself, no Helm install, no EULA acceptance, and no
+`k10.kasten.io/is-snapshot-class` annotation on the VolumeSnapshotClass
+(that annotation only matters once something's actually looking for it).
+Everything else is identical: the k3d cluster, snapshot-capable CSI
+storage (`sc1`/`sc2`), MinIO, and the sample app. Useful if you want the
+underlying infrastructure to test or teach against on its own, or to
+install a different backup tool on top of. It defaults to a different
+cluster name (`kasten-training-base`) so it can run side by side with a
+`deploy.sh` lab without colliding:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cpouthier/kasten-k3d-training/main/deploy-base.sh -o deploy-base.sh
+chmod +x deploy-base.sh
+./deploy-base.sh
+# later: ./deploy-base.sh destroy
+```
 
 ---
 
