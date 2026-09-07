@@ -94,6 +94,19 @@ Linux and on Windows (Docker runs natively inside the WSL2 Ubuntu distro
 there, not through Docker Desktop), it's the host's own free RAM/disk that
 matters. Any laptop from the last several years can run this comfortably.
 
+**On Windows specifically**: don't be alarmed if Task Manager shows the
+`vmmem`/`wsl.exe` process using far more than the ~1.3 GB above, ours has
+been reported as high as 16 GB. That's WSL2's memory reclaim behavior, not
+the lab's actual footprint: Linux treats free RAM as wasted RAM and fills
+it with page cache (there's ~9 GB of pulled image layers for it to cache),
+and WSL2 doesn't proactively hand that memory back to Windows by default.
+If you want to cap it, create `%UserProfile%\.wslconfig` with:
+```
+[wsl2]
+memory=6GB
+```
+then run `wsl --shutdown` and reopen Ubuntu for it to take effect.
+
 ---
 
 ## Quick start
